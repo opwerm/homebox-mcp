@@ -27,13 +27,20 @@ func New(c *homebox.Client, version string) *mcp.Server {
 	// several MCP servers connected at once.
 
 	type listArgs struct {
-		Query    string `json:"query,omitempty" jsonschema:"free-text search over names and descriptions"`
-		Page     int    `json:"page,omitempty" jsonschema:"1-based page number"`
-		PageSize int    `json:"pageSize,omitempty" jsonschema:"results per page; HomeBox caps this itself"`
+		Query     string   `json:"query,omitempty" jsonschema:"free-text search over names and descriptions"`
+		Page      int      `json:"page,omitempty" jsonschema:"1-based page number"`
+		PageSize  int      `json:"pageSize,omitempty" jsonschema:"results per page; HomeBox caps this itself"`
+		Tags      []string `json:"tags,omitempty" jsonschema:"only entities carrying ALL of these tag ids"`
+		ParentIDs []string `json:"parentIds,omitempty" jsonschema:"only entities directly inside these parent ids, e.g. a location"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "homebox_list_entities",
-		Description: "List or search entities (items and locations) in the HomeBox inventory.",
+		Name: "homebox_list_entities",
+		// Says ITEMS, not "entities", because locations do not come back
+		// here -- they are only reachable through the tree. Describing this
+		// as covering both is worse than not having it: a model asked what
+		// locations exist would call this, get nothing, and report there
+		// are none.
+		Description: "List or search ITEMS in the HomeBox inventory. Locations are NOT returned by this tool -- use homebox_entity_tree for those.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, a listArgs) (*mcp.CallToolResult, any, error) {
 		q := url.Values{}
 		if a.Query != "" {
@@ -44,6 +51,12 @@ func New(c *homebox.Client, version string) *mcp.Server {
 		}
 		if a.PageSize > 0 {
 			q.Set("pageSize", strconv.Itoa(a.PageSize))
+		}
+		for _, t := range a.Tags {
+			q.Add("tags", t)
+		}
+		for _, pid := range a.ParentIDs {
+			q.Add("parentIds", pid)
 		}
 
 		return call(ctx, c, "/entities", q)
@@ -129,6 +142,56 @@ func New(c *homebox.Client, version string) *mcp.Server {
 		Description: "The custom field names defined on entities, for building queries.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 		return call(ctx, c, "/entities/fields", nil)
+	})
+
+	type fieldArgs struct {
+		Field string `json:"field" jsonschema:"the custom field name, from homebox_custom_fields"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "homebox_custom_field_values",
+		Description: "The values in use for one custom field, so a query can filter on a real value rather than a guess.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, a fieldArgs) (*mcp.CallToolResult, any, error) {
+		if a.Field == "" {
+			return nil, nil, fmt.Errorf("field is required")
+		}
+
+		return call(ctx, c, "/entities/fields/values", url.Values{"field": {a.Field}})
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "homebox_get_tag",
+		Description: "One tag by id.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, a idArgs) (*mcp.CallToolResult, any, error) {
+		if a.ID == "" {
+			return nil, nil, fmt.Errorf("id is required")
+		}
+
+		return call(ctx, c, "/tags/"+url.PathEscape(a.ID), nil)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "homebox_entity_types",
+		Description: "The entity types defined in this HomeBox, which distinguish an item from a location.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		return call(ctx, c, "/entity-types", nil)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "homebox_maintenance",
+		Description: "Maintenance records across the inventory, or for one entity when an id is given.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, a idArgs) (*mcp.CallToolResult, any, error) {
+		if a.ID != "" {
+			return call(ctx, c, "/entities/"+url.PathEscape(a.ID)+"/maintenance", nil)
+		}
+
+		return call(ctx, c, "/maintenance", nil)
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "homebox_bill_of_materials",
+		Description: "The bill of materials report for the whole inventory.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		return call(ctx, c, "/reporting/bill-of-materials", nil)
 	})
 
 	return s

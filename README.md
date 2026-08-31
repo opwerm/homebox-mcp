@@ -28,14 +28,26 @@ whose consequences it cannot see is a different product, and a riskier one.
 
 | tool | what it answers |
 |---|---|
-| `homebox_list_entities` | search or page through items and locations |
+| `homebox_list_entities` | search or page through **items** (not locations), filterable by tag or parent |
 | `homebox_get_entity` | one entity in full, by id |
-| `homebox_entity_tree` | how entities nest inside one another |
+| `homebox_entity_tree` | how entities nest — **this is where locations are** |
 | `homebox_entity_path` | an entity's ancestors, root first |
-| `homebox_list_tags` | tags — what older HomeBox called labels |
+| `homebox_list_tags` / `homebox_get_tag` | tags — what older HomeBox called labels |
+| `homebox_entity_types` | the types that distinguish an item from a location |
 | `homebox_get_asset` | look up by printed asset id rather than UUID |
 | `homebox_statistics` | totals, or broken down by location, tag or price |
-| `homebox_custom_fields` | custom field names, for building queries |
+| `homebox_custom_fields` / `homebox_custom_field_values` | custom field names, and the values in use |
+| `homebox_maintenance` | maintenance records, all or for one entity |
+| `homebox_bill_of_materials` | the bill-of-materials report |
+
+`/v1/entities` returns items only — locations are reachable through the tree.
+The tool descriptions say so, because a model picking a tool reads them: one
+that claims to list locations and returns none is worse than no tool at all.
+
+This is not the whole API. HomeBox exposes 42 GET endpoints; these cover the
+inventory-reading ones. Deliberately absent: authentication and API-key
+management, group administration, bulk export, notifiers, and label/QR
+image generation.
 
 ## Authentication
 
