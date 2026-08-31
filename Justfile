@@ -11,6 +11,30 @@ check:
     go test ./...
     go build ./...
     go build -o /dev/null ./cmd/homebox-mcp
+    just chart
+
+# Lint and render the chart, and prove its guards still refuse bad input.
+#
+# A chart exercised only with correct values has not been tested: the
+# schema and the required-value guards exist to REJECT things, so the
+# checks that matter are the ones expecting failure.
+chart:
+    helm lint charts/homebox-mcp \
+        --set homebox.url=http://homebox --set homebox.existingSecret=x
+    helm template t charts/homebox-mcp \
+        --set homebox.url=http://homebox --set homebox.existingSecret=x > /dev/null
+    @# missing required values
+    @! helm template t charts/homebox-mcp >/dev/null 2>&1 \
+        || (echo "FAIL: rendered without homebox.url"; exit 1)
+    @# url must not carry /api -- the server appends it
+    @! helm template t charts/homebox-mcp --set homebox.url=http://homebox/api \
+        --set homebox.existingSecret=x >/dev/null 2>&1 \
+        || (echo "FAIL: accepted a url ending in /api"; exit 1)
+    @# unknown keys are typos, not options
+    @! helm template t charts/homebox-mcp --set homebox.url=http://homebox \
+        --set homebox.existingSecret=x --set replicaCounts=2 >/dev/null 2>&1 \
+        || (echo "FAIL: accepted an unknown values key"; exit 1)
+    @echo "chart ok: renders, and refuses missing values, a /api url and unknown keys"
 
 # Run against a HomeBox instance over stdio (the default transport).
 run url token:
