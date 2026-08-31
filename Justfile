@@ -1,10 +1,16 @@
 # Everything goes through here; CI runs the same recipes.
 
 # Build and vet.
+#
+# Builds the COMMAND explicitly, not just ./... — a repo whose main package
+# is missing still passes `go build ./...`, because the library packages
+# compile on their own. That is exactly how cmd/ got left out of the first
+# release: .gitignore swallowed it and every check stayed green.
 check:
     go vet ./...
     go test ./...
     go build ./...
+    go build -o /dev/null ./cmd/homebox-mcp
 
 # Run against a HomeBox instance over stdio (the default transport).
 run url token:
