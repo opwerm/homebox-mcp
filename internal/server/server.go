@@ -142,5 +142,9 @@ func call(ctx context.Context, c *homebox.Client, path string, q url.Values) (*m
 		return nil, nil, err
 	}
 
+	if _, ok := out.(map[string]any); !ok {
+		return nil, map[string]any{"items": out}, nil
+	}
+
 	return nil, out, nil
 }
