@@ -2,11 +2,21 @@
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/* The standard Helm idiom, and not merely cosmetic: naively joining
+     release and chart name yields homebox-mcp-homebox-mcp for the obvious
+     release name, and a route pointing at "homebox-mcp" then fails with
+     BackendNotFound -- which stays invisible behind a gateway that rejects
+     unauthenticated requests before it ever routes them. */}}
 {{- define "homebox-mcp.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- printf "%s-%s" .Release.Name (include "homebox-mcp.name" .) | trunc 63 | trimSuffix "-" | replace "--" "-" -}}
+{{- $name := default .Chart.Name .Values.nameOverride -}}
+{{- if contains $name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
