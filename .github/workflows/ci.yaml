@@ -1,0 +1,29 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [master]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: truvity/ci-workflows/.github/actions/setup-devbox@b19968438f6f19b681517c4e2cfcb87fe7887673 # v2.16.3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check
+        run: devbox run -- just check
+      # Renders the chart the way a release would, and proves the guards
+      # still fire. A chart that only renders WITH every value set has not
+      # been tested; the point of the guards is the refusal.
+      - name: Chart renders, and refuses without required values
+        run: |
+          devbox run -- helm template t charts/homebox-mcp \
+            --set homebox.url=http://homebox \
+            --set homebox.existingSecret=homebox-mcp-token > /dev/null
+          if devbox run -- helm template t charts/homebox-mcp > /dev/null 2>&1; then
+            echo "chart rendered without homebox.url — the guard is not firing"
+            exit 1
+          fi

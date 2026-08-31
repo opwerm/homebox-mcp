@@ -1,0 +1,58 @@
+# Image via ko (no Dockerfile), chart pushed separately by helmctl in the
+# release workflow. Both land in GHCR under opwerm.
+version: 2
+project_name: homebox-mcp
+
+builds:
+  - id: homebox-mcp
+    main: ./cmd/homebox-mcp
+    binary: homebox-mcp
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+kos:
+  - id: homebox-mcp
+    build: homebox-mcp
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .IsSnapshot }}latest{{ end }}"
+    # arm64 is not optional: the cluster this runs on is Turing RK1 boards.
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    bare: true
+    preserve_import_paths: false
+    base_import_paths: true
+    base_image: gcr.io/distroless/static:nonroot
+    sbom: none
+    labels:
+      org.opencontainers.image.title: homebox-mcp
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.source: https://github.com/opwerm/homebox-mcp
+      org.opencontainers.image.licenses: MIT
+
+archives:
+  - id: homebox-mcp
+    ids: [homebox-mcp]
+    formats: [tar.gz]
+    name_template: "homebox-mcp_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^docs:"
+
+release:
+  prerelease: auto
+  footer: |
+    Image: `ghcr.io/opwerm/homebox-mcp:{{ .Version }}`
+    Chart: `oci://ghcr.io/opwerm/charts/homebox-mcp:{{ .Version }}`
