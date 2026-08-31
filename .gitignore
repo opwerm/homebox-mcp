@@ -1,2 +1,4 @@
-homebox-mcp
-dist/
+# Anchored to the repo root ON PURPOSE. A bare `homebox-mcp` also matches
+# charts/homebox-mcp/, which silently kept the whole chart out of the repo.
+/homebox-mcp
+/dist/

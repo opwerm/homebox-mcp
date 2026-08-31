@@ -1,0 +1,13 @@
+apiVersion: v2
+name: homebox-mcp
+description: Read-only Model Context Protocol server for a HomeBox inventory
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/opwerm/homebox-mcp
+sources:
+  - https://github.com/opwerm/homebox-mcp
+maintainers:
+  - name: Oleg Tsarev
+    email: oleg@tsarev.id
+keywords: [mcp, homebox, inventory]
