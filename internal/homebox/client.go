@@ -6,8 +6,10 @@
 package homebox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +17,10 @@ import (
 	"strings"
 	"time"
 )
+
+// maxTextBytes caps a non-JSON response. The reports have no pagination,
+// so an inventory of any size would otherwise arrive whole.
+const maxTextBytes = 256 << 10
 
 // Client talks to one HomeBox instance as one API key.
 //
@@ -40,16 +46,31 @@ func New(baseURL, token string) *Client {
 	}
 }
 
-// get fetches path (relative to /api/v1) and decodes the JSON body.
-func (c *Client) get(ctx context.Context, path string, query url.Values, out any) error {
+// do performs one request against /api/v1 and decodes the JSON body, if any.
+func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, out any) error {
 	u := c.baseURL + "/api/v1" + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	var rdr io.Reader
+
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encode body: %w", err)
+		}
+
+		rdr = bytes.NewReader(b)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, u, rdr)
 	if err != nil {
 		return err
+	}
+
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 
 	// HomeBox's only auth scheme: its own bearer token. It does NOT accept
@@ -60,18 +81,93 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, out any
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", path, err)
+		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		// Cap the body: an HTML error page from a misconfigured proxy is
 		// otherwise pasted whole into an LLM's context.
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("GET %s: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(b)))
 	}
 
-	return json.NewDecoder(resp.Body).Decode(out)
+	// 204, and some deletes, answer with no body at all.
+	if resp.StatusCode == http.StatusNoContent || out == nil {
+		return nil
+	}
+
+	dec := json.NewDecoder(resp.Body)
+
+	if err := dec.Decode(out); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil // success with an empty body
+		}
+
+		return fmt.Errorf("%s %s: decode: %w", method, path, err)
+	}
+
+	return nil
+}
+
+func (c *Client) get(ctx context.Context, path string, query url.Values, out any) error {
+	return c.do(ctx, http.MethodGet, path, query, nil, out)
+}
+
+// Text fetches an endpoint that answers with something other than JSON.
+// HomeBox serves its reports as text/csv, which the JSON decoder rejects with
+// a parse error that reads as a broken server rather than a wrong expectation.
+func (c *Client) Text(ctx context.Context, path string, query url.Values) (string, error) {
+	u := c.baseURL + "/api/v1" + path
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "*/*")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("GET %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	// Reports grow with the inventory, so cap what can reach an LLM's context.
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxTextBytes))
+	if err != nil {
+		return "", fmt.Errorf("GET %s: %w", path, err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", fmt.Errorf("GET %s: %s: %s", path, resp.Status,
+			strings.TrimSpace(string(b[:min(len(b), 512)])))
+	}
+
+	return string(b), nil
+}
+
+// Call performs any method and returns the decoded JSON as-is.
+//
+// Bodies are passed through unmodelled, for the same reason responses are:
+// HomeBox's own shapes are what its docs describe, and every struct defined
+// here would be one more thing to drift from upstream.
+func (c *Client) Call(ctx context.Context, method, path string, query url.Values, body any) (any, error) {
+	var out any
+	if err := c.do(ctx, method, path, query, body, &out); err != nil {
+		return nil, err
+	}
+
+	if out == nil {
+		// A successful write with no body still needs to say so.
+		return map[string]any{"ok": true}, nil
+	}
+
+	return out, nil
 }
 
 // Raw fetches a path and returns the decoded JSON as-is.

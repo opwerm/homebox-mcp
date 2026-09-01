@@ -20,34 +20,50 @@ And it **targets an API that no longer exists**. HomeBox 0.26.2 replaced
 `/v1/items`, `/v1/labels` and `/v1/locations` with `/v1/entities` and
 `/v1/tags`. Every tool it exposes would 404.
 
-## Read only, deliberately
+## What it exposes
 
-HomeBox accepts `POST` on `/entities` and `/tags`, and `PUT`/`DELETE` on
-`/tags/{id}`. None of that is exposed. A model that can rewrite an inventory
-whose consequences it cannot see is a different product, and a riskier one.
+The inventory is covered end to end: entities, tags, entity types, templates,
+maintenance records and attachments all read, create, update and delete.
 
-| tool | what it answers |
+| tools | what they cover |
 |---|---|
-| `homebox_list_entities` | search or page through **items** (not locations), filterable by tag or parent |
-| `homebox_get_entity` | one entity in full, by id |
-| `homebox_entity_tree` | how entities nest — **this is where locations are** |
-| `homebox_entity_path` | an entity's ancestors, root first |
-| `homebox_list_tags` / `homebox_get_tag` | tags — what older HomeBox called labels |
-| `homebox_entity_types` | the types that distinguish an item from a location |
-| `homebox_get_asset` | look up by printed asset id rather than UUID |
-| `homebox_statistics` | totals, or broken down by location, tag or price |
-| `homebox_custom_fields` / `homebox_custom_field_values` | custom field names, and the values in use |
-| `homebox_maintenance` | maintenance records, all or for one entity |
-| `homebox_bill_of_materials` | the bill-of-materials report |
+| `homebox_list_entities` `homebox_get_entity` `homebox_create_entity` `homebox_update_entity` `homebox_patch_entity` `homebox_delete_entity` `homebox_duplicate_entity` | entities — **items, not locations** |
+| `homebox_entity_tree` `homebox_entity_path` | how entities nest — **this is where locations are** |
+| `homebox_list_tags` `homebox_get_tag` `homebox_create_tag` `homebox_update_tag` `homebox_delete_tag` | tags — what older HomeBox called labels |
+| `homebox_entity_types` `homebox_create_entity_type` `homebox_update_entity_type` `homebox_delete_entity_type` | the types that distinguish an item from a location |
+| `homebox_list_templates` `homebox_get_template` `homebox_create_template` `homebox_update_template` `homebox_delete_template` `homebox_create_item_from_template` | templates |
+| `homebox_maintenance` `homebox_create_maintenance` `homebox_update_maintenance` `homebox_delete_maintenance` | maintenance records |
+| `homebox_get_attachment` `homebox_update_attachment` `homebox_delete_attachment` | attachments on an entity |
+| `homebox_get_asset` `homebox_search_barcode` | look up by printed asset id or barcode |
+| `homebox_statistics` `homebox_bill_of_materials` `homebox_currencies` | totals, the CSV report, and the currency list |
+| `homebox_custom_fields` `homebox_custom_field_values` | custom field names, and the values in use |
+| `homebox_get_configuration` `homebox_set_configuration` | group and user settings, as one document each way |
+
+Every tool carries MCP annotations, so a client can tell a read from a delete
+without calling it: reads are `readOnlyHint`, creates are non-destructive, and
+updates and deletes are `destructiveHint`.
 
 `/v1/entities` returns items only — locations are reachable through the tree.
 The tool descriptions say so, because a model picking a tool reads them: one
 that claims to list locations and returns none is worse than no tool at all.
 
-This is not the whole API. HomeBox exposes 42 GET endpoints; these cover the
-inventory-reading ones. Deliberately absent: authentication and API-key
-management, group administration, bulk export, notifiers, and label/QR
-image generation.
+## What it will not do
+
+Some of the API is deliberately unreachable, because these are the calls whose
+damage a model cannot see coming and cannot undo:
+
+- **`/actions/*`** — including `ensure-asset-ids`, `zero-item-time-fields` and
+  `wipe-inventory`. One of these empties the group.
+- **Authentication and API keys** — minting or revoking a credential is not
+  inventory work.
+- **Group membership and invitations** — who can see the data is not the
+  model's call.
+- **Bulk import and export** — an import is an undoable mass write.
+- **Notifiers** — `set_configuration` will not touch them, so a misread
+  instruction cannot redirect or silence alerts.
+
+Configuration is two tools rather than a dozen: one read that returns the group
+and user settings together, and one write that takes the same shape back.
 
 ## Authentication
 
