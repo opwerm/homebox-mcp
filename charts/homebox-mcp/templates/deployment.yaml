@@ -4,6 +4,9 @@ kind: Deployment
 metadata:
   name: {{ include "homebox-mcp.fullname" . }}
   labels: {{- include "homebox-mcp.labels" . | nindent 4 }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
