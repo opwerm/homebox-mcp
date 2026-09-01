@@ -59,9 +59,14 @@ because that is where a model reads.
 pre-0.26 API — including most of what a model has seen about HomeBox — refers
 to `/items`, `/labels` and `/locations`, none of which exist any more.
 
-**Updates are `PUT`, not merges.** `homebox_update_entity` replaces the
-object: fields omitted from the body are cleared. Read the entity first, or
-use `homebox_patch_entity` for a partial change.
+**`homebox_update_entity` replaces the object**: fields omitted from the body
+are cleared. Reach for `homebox_patch_entity` to change a few fields and leave
+the rest alone -- it reads, merges and writes for you.
+
+Neither will move an entity by accident. HomeBox does not report an entity's
+parent when you read it, so the obvious read-modify-write would put everything
+at the top level; both tools carry the parent forward unless you pass
+`parentId` yourself.
 
 **Everything is group-scoped.** The server sees whatever its API key's group
 contains, and every change it makes is attributed to that key rather than to

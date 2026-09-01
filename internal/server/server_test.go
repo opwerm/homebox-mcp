@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -256,5 +257,194 @@ func TestCSVReportIsNotDecodedAsJSON(t *testing.T) {
 
 	if !strings.Contains(csv, "Drill,1") {
 		t.Errorf("csv = %q, want the rows the server sent", csv)
+	}
+}
+
+// homeboxStub imitates the three behaviours that made the write tools lie:
+// create keeps only name/entityTypeId/parentId, GET never reports the parent,
+// and PATCH accepts everything while writing nothing.
+type homeboxStub struct {
+	entity  map[string]any
+	parent  string
+	puts    []map[string]any
+	patches int
+	posts   int
+}
+
+func (h *homeboxStub) handler(t *testing.T) http.Handler {
+	t.Helper()
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.Method == http.MethodPost:
+			h.posts++
+
+			var in map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&in)
+
+			h.entity = map[string]any{"id": "e1", "name": in["name"], "description": ""}
+			if p, ok := in["parentId"].(string); ok {
+				h.parent = p
+			}
+
+			_ = json.NewEncoder(w).Encode(h.entity)
+
+		case r.Method == http.MethodPatch:
+			h.patches++
+			_ = json.NewEncoder(w).Encode(h.entity) // accepted, nothing written
+
+		case r.Method == http.MethodPut:
+			var in map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			h.puts = append(h.puts, in)
+
+			if p, ok := in["parentId"].(string); ok {
+				h.parent = p
+			} else {
+				h.parent = "" // a PUT without parentId unparents, as HomeBox does
+			}
+
+			for k, v := range in {
+				h.entity[k] = v
+			}
+
+			_ = json.NewEncoder(w).Encode(h.entity)
+
+		case strings.HasSuffix(r.URL.Path, "/path"):
+			path := []any{}
+			if h.parent != "" {
+				path = append(path, map[string]any{"id": h.parent, "name": "Box"})
+			}
+
+			path = append(path, map[string]any{"id": "e1", "name": h.entity["name"]})
+			_ = json.NewEncoder(w).Encode(path)
+
+		default: // GET one entity -- note the absent parent
+			_ = json.NewEncoder(w).Encode(h.entity)
+		}
+	})
+}
+
+// Create accepts a full body and HomeBox keeps three fields of it, answering
+// 201 either way. The tool has to finish the job or the data is silently lost.
+func TestCreateAppliesTheWholeBody(t *testing.T) {
+	h := &homeboxStub{}
+	cs := connect(t, h.handler(t))
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "homebox_create_entity",
+		Arguments: map[string]any{"body": map[string]any{
+			"name": "Switch", "entityTypeId": "t1", "parentId": "loc1", "manufacturer": "TP-Link",
+		}},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("create: %v %v", err, res)
+	}
+
+	if len(h.puts) != 1 {
+		t.Fatalf("%d follow-up writes, want 1 -- the dropped fields were never applied", len(h.puts))
+	}
+
+	if h.puts[0]["manufacturer"] != "TP-Link" {
+		t.Errorf("manufacturer = %v, want TP-Link", h.puts[0]["manufacturer"])
+	}
+
+	if h.parent != "loc1" {
+		t.Errorf("parent = %q, want loc1 -- the follow-up PUT unparented it", h.parent)
+	}
+}
+
+// The second write is not free, so it should only happen when the body has
+// something create would have dropped.
+func TestCreateSkipsTheSecondWriteWhenNothingWouldBeLost(t *testing.T) {
+	h := &homeboxStub{}
+	cs := connect(t, h.handler(t))
+
+	if _, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "homebox_create_entity",
+		Arguments: map[string]any{"body": map[string]any{"name": "Box", "entityTypeId": "t1"}},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if len(h.puts) != 0 {
+		t.Errorf("%d follow-up writes, want 0", len(h.puts))
+	}
+}
+
+// Read-modify-write is the obvious way to use a PUT API, and here it silently
+// moved things to the root, because GET does not return the parent.
+func TestUpdateKeepsTheParent(t *testing.T) {
+	h := &homeboxStub{entity: map[string]any{"id": "e1", "name": "Vacuum"}, parent: "floor1"}
+	cs := connect(t, h.handler(t))
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "homebox_update_entity",
+		Arguments: map[string]any{"id": "e1", "body": map[string]any{
+			"id": "e1", "name": "Vacuum", "description": "changed",
+		}},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("update: %v %v", err, res)
+	}
+
+	if h.parent != "floor1" {
+		t.Errorf("parent = %q, want floor1 -- an update moved the entity to the root", h.parent)
+	}
+}
+
+// Carrying the parent forward must not stop a caller from deliberately moving
+// something.
+func TestUpdateHonoursAnExplicitParent(t *testing.T) {
+	h := &homeboxStub{entity: map[string]any{"id": "e1", "name": "Vacuum"}, parent: "floor1"}
+	cs := connect(t, h.handler(t))
+
+	if _, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "homebox_update_entity",
+		Arguments: map[string]any{"id": "e1", "body": map[string]any{
+			"name": "Vacuum", "parentId": "floor2",
+		}},
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	if h.parent != "floor2" {
+		t.Errorf("parent = %q, want floor2 -- an explicit move was ignored", h.parent)
+	}
+}
+
+// HomeBox's PATCH answers 200 and writes nothing, so a model told to prefer it
+// would make changes that quietly evaporate.
+func TestPatchActuallyWrites(t *testing.T) {
+	h := &homeboxStub{
+		entity: map[string]any{"id": "e1", "name": "Vacuum", "manufacturer": "Dreame"},
+		parent: "floor1",
+	}
+	cs := connect(t, h.handler(t))
+
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "homebox_patch_entity",
+		Arguments: map[string]any{"id": "e1", "body": map[string]any{"description": "patched"}},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("patch: %v %v", err, res)
+	}
+
+	if h.patches != 0 {
+		t.Errorf("issued %d PATCH requests -- HomeBox ignores those", h.patches)
+	}
+
+	if h.entity["description"] != "patched" {
+		t.Errorf("description = %v, want patched -- the change was not written", h.entity["description"])
+	}
+
+	if h.entity["manufacturer"] != "Dreame" {
+		t.Errorf("manufacturer = %v, want Dreame -- a partial change clobbered another field", h.entity["manufacturer"])
+	}
+
+	if h.parent != "floor1" {
+		t.Errorf("parent = %q, want floor1 -- a partial change moved the entity", h.parent)
 	}
 }

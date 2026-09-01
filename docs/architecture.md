@@ -106,6 +106,32 @@ cautious reading and silently loses function.
 A test enumerates the registered tools and fails on any that is neither
 read-only nor destructive-hinted.
 
+### The write tools paper over three HomeBox behaviours
+
+Left alone, all three lose data while reporting success -- the worst failure
+mode a tool can have, because nothing downstream can tell.
+
+**Create keeps three fields.** `POST /entities` applies `name`,
+`entityTypeId` and `parentId`, discards the rest of the body, and answers 201.
+`homebox_create_entity` follows it with the `PUT` that HomeBox does honour, so
+the whole body lands. The second write is skipped when the body holds nothing
+that would be dropped.
+
+**Reading an entity does not tell you where it is.** `GET /entities/{id}`
+returns no parent field at all; only `GET /entities/{id}/path` knows. So the
+obvious read-modify-write -- fetch, change one field, `PUT` it back -- moves
+the entity to the root, silently, because the `PUT` sees no parent. Both write
+tools look the parent up and carry it forward unless the caller passes
+`parentId`, which still works for a deliberate move.
+
+**PATCH does nothing.** `PATCH /entities/{id}` answers 200 with the unchanged
+entity: accepted, not written. `homebox_patch_entity` reads, merges and `PUT`s
+instead, which is what a partial update means.
+
+These were all found by loading a real inventory through the tools and then
+checking the result, not by reading the API docs. Each is covered by a test
+that drives the registered tool against a stub reproducing the quirk.
+
 ### The excluded endpoints are a safety boundary, not an oversight
 
 `/actions/*` (including `wipe-inventory`), authentication and API-key

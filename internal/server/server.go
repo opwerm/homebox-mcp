@@ -126,30 +126,98 @@ func addEntities(s *mcp.Server, c *homebox.Client) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "homebox_create_entity",
-		Description: "Create an item or location. The body is HomeBox's own shape: name, description, entityTypeId, parentId, quantity, purchasePrice and so on.",
+		Description: "Create an item or location. The body is HomeBox's own shape: name, entityTypeId, parentId, description, manufacturer, modelNumber, serialNumber, notes, quantity, purchasePrice, fields, tagIds and so on. The whole body is applied.",
 		Annotations: creates(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, a createArgs) (*mcp.CallToolResult, any, error) {
 		if len(a.Body) == 0 {
 			return nil, nil, fmt.Errorf("body is required")
 		}
 
-		return call(ctx, c, http.MethodPost, "/entities", nil, a.Body)
+		created, err := c.Call(ctx, http.MethodPost, "/entities", nil, a.Body)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		obj, ok := created.(map[string]any)
+		if !ok {
+			return nil, nil, fmt.Errorf("create returned %T, want an object", created)
+		}
+
+		// HomeBox's create accepts only name, entityTypeId and parentId; every
+		// other field in the body is dropped, and it still answers 201. Nothing
+		// about the response says so. Apply the rest with the PUT that HomeBox
+		// does honour, so the tool does what its description promises.
+		if !needsSecondWrite(a.Body) {
+			return nil, obj, nil
+		}
+
+		id, _ := obj["id"].(string)
+		if id == "" {
+			return nil, obj, nil
+		}
+
+		full := mergeInto(obj, a.Body)
+
+		// The POST already set the parent; a PUT that omits it would clear it.
+		if pid, ok := a.Body["parentId"]; ok {
+			full["parentId"] = pid
+		}
+
+		return call(ctx, c, http.MethodPut, "/entities/"+url.PathEscape(id), nil, full)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "homebox_update_entity",
-		Description: "REPLACE an entity. PUT semantics: fields omitted from the body are cleared, so send the whole object -- read it first with homebox_get_entity.",
+		Name: "homebox_update_entity",
+		Description: "REPLACE an entity: fields omitted from the body are cleared, so send the whole object -- " +
+			"read it first with homebox_get_entity. The parent is carried over unless the body sets parentId, " +
+			"so a replace does not move the entity by accident. To change only a few fields, use homebox_patch_entity.",
 		Annotations: updates(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, a bodyArgs) (*mcp.CallToolResult, any, error) {
-		return byID(ctx, c, http.MethodPut, "/entities/", a.ID, a.Body)
+		if a.ID == "" {
+			return nil, nil, fmt.Errorf("id is required")
+		}
+
+		body, err := withParent(ctx, c, a.ID, a.Body)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return call(ctx, c, http.MethodPut, "/entities/"+url.PathEscape(a.ID), nil, body)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "homebox_patch_entity",
-		Description: "Change SOME fields of an entity, leaving the rest alone. Prefer this over homebox_update_entity unless a full replace is intended.",
+		Name: "homebox_patch_entity",
+		Description: "Change SOME fields of an entity, leaving the rest -- including its parent -- alone. " +
+			"Prefer this over homebox_update_entity unless a full replace is intended.",
 		Annotations: updates(),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, a bodyArgs) (*mcp.CallToolResult, any, error) {
-		return byID(ctx, c, http.MethodPatch, "/entities/", a.ID, a.Body)
+		if a.ID == "" {
+			return nil, nil, fmt.Errorf("id is required")
+		}
+
+		if len(a.Body) == 0 {
+			return nil, nil, fmt.Errorf("body is required")
+		}
+
+		// HomeBox answers PATCH /entities/{id} with 200 and the unchanged
+		// entity: the request is accepted and nothing is written. Read, merge
+		// and PUT instead, which is what a caller means by a partial update.
+		current, err := c.Call(ctx, http.MethodGet, "/entities/"+url.PathEscape(a.ID), nil, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		obj, ok := current.(map[string]any)
+		if !ok {
+			return nil, nil, fmt.Errorf("entity %s returned %T, want an object", a.ID, current)
+		}
+
+		body, err := withParent(ctx, c, a.ID, mergeInto(obj, a.Body))
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return call(ctx, c, http.MethodPut, "/entities/"+url.PathEscape(a.ID), nil, body)
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -594,4 +662,81 @@ func call(ctx context.Context, c *homebox.Client, method, path string, q url.Val
 	}
 
 	return nil, out, nil
+}
+
+// createHonours lists the only fields HomeBox applies on POST /entities.
+// Anything else in the body is discarded, silently and with a 201.
+var createHonours = map[string]bool{"name": true, "entityTypeId": true, "parentId": true}
+
+// needsSecondWrite reports whether the body carries anything create would drop.
+func needsSecondWrite(body map[string]any) bool {
+	for k := range body {
+		if !createHonours[k] {
+			return true
+		}
+	}
+
+	return false
+}
+
+// mergeInto overlays patch onto a copy of base. base is never modified.
+func mergeInto(base, patch map[string]any) map[string]any {
+	out := make(map[string]any, len(base)+len(patch))
+	for k, v := range base {
+		out[k] = v
+	}
+
+	for k, v := range patch {
+		out[k] = v
+	}
+
+	return out
+}
+
+// withParent returns body with parentId filled in from the entity's current
+// parent, unless the caller set one.
+//
+// Updating an entity is a PUT, and GET /entities/{id} does not report the
+// parent at all -- so the obvious read-modify-write moves the entity to the
+// root, silently. The only endpoint that knows the parent is the path.
+func withParent(ctx context.Context, c *homebox.Client, id string, body map[string]any) (map[string]any, error) {
+	if _, ok := body["parentId"]; ok {
+		return body, nil
+	}
+
+	parent, err := parentOf(ctx, c, id)
+	if err != nil {
+		return nil, err
+	}
+
+	out := mergeInto(body, nil)
+	if parent != "" {
+		out["parentId"] = parent
+	}
+
+	return out, nil
+}
+
+// parentOf reports the id of an entity's parent, or "" when it sits at the
+// root. The path runs root-first and ends with the entity itself, so the
+// parent is the element before last.
+func parentOf(ctx context.Context, c *homebox.Client, id string) (string, error) {
+	out, err := c.Call(ctx, http.MethodGet, "/entities/"+url.PathEscape(id)+"/path", nil, nil)
+	if err != nil {
+		return "", err
+	}
+
+	path, ok := out.([]any)
+	if !ok || len(path) < 2 {
+		return "", nil
+	}
+
+	parent, ok := path[len(path)-2].(map[string]any)
+	if !ok {
+		return "", nil
+	}
+
+	pid, _ := parent["id"].(string)
+
+	return pid, nil
 }
