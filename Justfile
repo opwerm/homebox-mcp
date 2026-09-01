@@ -47,5 +47,10 @@ serve url token addr="127.0.0.1:8080":
         go run ./cmd/homebox-mcp
 
 # What the release will build, without publishing.
+#
+# KO_DOCKER_REPO is required even when publishing is skipped -- ko needs a
+# repository to name the image it builds, and fails before building without
+# one. CI passes the real registry; locally any name will do, and ko.local
+# keeps the result out of a registry namespace that means something.
 snapshot:
-    goreleaser release --snapshot --clean --skip=publish
+    KO_DOCKER_REPO=ko.local goreleaser release --snapshot --clean --skip=publish
