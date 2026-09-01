@@ -266,6 +266,7 @@ func TestCSVReportIsNotDecodedAsJSON(t *testing.T) {
 type homeboxStub struct {
 	entity  map[string]any
 	parent  string
+	tags    []string
 	puts    []map[string]any
 	patches int
 	posts   int
@@ -306,6 +307,15 @@ func (h *homeboxStub) handler(t *testing.T) http.Handler {
 				h.parent = "" // a PUT without parentId unparents, as HomeBox does
 			}
 
+			h.tags = nil // and one without tagIds strips the tags
+			if ids, ok := in["tagIds"].([]any); ok {
+				for _, id := range ids {
+					if str, ok := id.(string); ok {
+						h.tags = append(h.tags, str)
+					}
+				}
+			}
+
 			for k, v := range in {
 				h.entity[k] = v
 			}
@@ -321,8 +331,23 @@ func (h *homeboxStub) handler(t *testing.T) http.Handler {
 			path = append(path, map[string]any{"id": "e1", "name": h.entity["name"]})
 			_ = json.NewEncoder(w).Encode(path)
 
-		default: // GET one entity -- note the absent parent
-			_ = json.NewEncoder(w).Encode(h.entity)
+		default: // GET one entity -- parent and tags come back as objects, not ids
+			out := map[string]any{}
+			for k, v := range h.entity {
+				out[k] = v
+			}
+
+			if h.parent != "" {
+				out["parent"] = map[string]any{"id": h.parent, "name": "Box"}
+			}
+
+			tags := []any{}
+			for _, t := range h.tags {
+				tags = append(tags, map[string]any{"id": t, "name": t})
+			}
+
+			out["tags"] = tags
+			_ = json.NewEncoder(w).Encode(out)
 		}
 	})
 }
@@ -446,5 +471,48 @@ func TestPatchActuallyWrites(t *testing.T) {
 
 	if h.parent != "floor1" {
 		t.Errorf("parent = %q, want floor1 -- a partial change moved the entity", h.parent)
+	}
+}
+
+// Tags are the same trap as the parent one level out: read gives objects,
+// write takes ids, and a PUT without tagIds strips them. This stripped the
+// tags off twenty-two items during a real bulk load before it was noticed.
+func TestUpdateKeepsTheTags(t *testing.T) {
+	h := &homeboxStub{
+		entity: map[string]any{"id": "e1", "name": "Vacuum"},
+		parent: "floor1", tags: []string{"tag-iot"},
+	}
+	cs := connect(t, h.handler(t))
+
+	if _, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "homebox_update_entity",
+		Arguments: map[string]any{"id": "e1", "body": map[string]any{
+			"id": "e1", "name": "Vacuum", "description": "changed",
+		}},
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	if len(h.tags) != 1 || h.tags[0] != "tag-iot" {
+		t.Errorf("tags = %v, want [tag-iot] -- an update stripped them", h.tags)
+	}
+}
+
+// Preserving tags must not stop a caller from setting them.
+func TestUpdateHonoursExplicitTags(t *testing.T) {
+	h := &homeboxStub{entity: map[string]any{"id": "e1", "name": "Vacuum"}, tags: []string{"old"}}
+	cs := connect(t, h.handler(t))
+
+	if _, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "homebox_update_entity",
+		Arguments: map[string]any{"id": "e1", "body": map[string]any{
+			"name": "Vacuum", "tagIds": []any{"new"},
+		}},
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	if len(h.tags) != 1 || h.tags[0] != "new" {
+		t.Errorf("tags = %v, want [new]", h.tags)
 	}
 }

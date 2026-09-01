@@ -177,7 +177,7 @@ func addEntities(s *mcp.Server, c *homebox.Client) {
 			return nil, nil, fmt.Errorf("id is required")
 		}
 
-		body, err := withParent(ctx, c, a.ID, a.Body)
+		body, err := withRelations(ctx, c, a.ID, a.Body)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -212,7 +212,7 @@ func addEntities(s *mcp.Server, c *homebox.Client) {
 			return nil, nil, fmt.Errorf("entity %s returned %T, want an object", a.ID, current)
 		}
 
-		body, err := withParent(ctx, c, a.ID, mergeInto(obj, a.Body))
+		body, err := withRelations(ctx, c, a.ID, mergeInto(obj, a.Body))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -693,50 +693,92 @@ func mergeInto(base, patch map[string]any) map[string]any {
 	return out
 }
 
-// withParent returns body with parentId filled in from the entity's current
-// parent, unless the caller set one.
+// relations are the fields HomeBox returns as objects when you read an entity
+// but accepts as ids when you write one. A PUT that omits the id form clears
+// the relation, so a read-modify-write silently drops it.
 //
-// Updating an entity is a PUT, and GET /entities/{id} does not report the
-// parent at all -- so the obvious read-modify-write moves the entity to the
-// root, silently. The only endpoint that knows the parent is the path.
-func withParent(ctx context.Context, c *homebox.Client, id string, body map[string]any) (map[string]any, error) {
-	if _, ok := body["parentId"]; ok {
-		return body, nil
-	}
+// This is not theoretical: it unparented rooms and stripped the tags off
+// twenty-two items during a bulk load, and every call returned success.
+var relations = []struct{ read, write string }{
+	{"parent", "parentId"},
+	{"entityType", "entityTypeId"},
+}
 
-	parent, err := parentOf(ctx, c, id)
-	if err != nil {
-		return nil, err
-	}
-
+// withRelations fills in the id form of every relation the caller did not set,
+// taking it from the body if it carries the read shape and otherwise from the
+// entity itself. An explicit id always wins, so deliberate moves still work.
+func withRelations(ctx context.Context, c *homebox.Client, id string, body map[string]any) (map[string]any, error) {
 	out := mergeInto(body, nil)
-	if parent != "" {
-		out["parentId"] = parent
+
+	var current map[string]any
+
+	// look returns the read-shaped value, preferring what the caller sent.
+	look := func(key string) (any, error) {
+		if v, ok := out[key]; ok {
+			return v, nil
+		}
+
+		if current == nil {
+			got, err := c.Call(ctx, http.MethodGet, "/entities/"+url.PathEscape(id), nil, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			m, ok := got.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("entity %s returned %T, want an object", id, got)
+			}
+
+			current = m
+		}
+
+		return current[key], nil
+	}
+
+	for _, r := range relations {
+		if _, ok := out[r.write]; ok {
+			continue
+		}
+
+		v, err := look(r.read)
+		if err != nil {
+			return nil, err
+		}
+
+		if m, ok := v.(map[string]any); ok {
+			if rid, ok := m["id"].(string); ok && rid != "" {
+				out[r.write] = rid
+			}
+		}
+	}
+
+	// Tags are the same problem one level out: a list of objects on read, a
+	// list of ids on write.
+	if _, ok := out["tagIds"]; !ok {
+		v, err := look("tags")
+		if err != nil {
+			return nil, err
+		}
+
+		if arr, ok := v.([]any); ok && len(arr) > 0 {
+			ids := make([]string, 0, len(arr))
+
+			for _, t := range arr {
+				m, ok := t.(map[string]any)
+				if !ok {
+					continue
+				}
+
+				if tid, ok := m["id"].(string); ok && tid != "" {
+					ids = append(ids, tid)
+				}
+			}
+
+			if len(ids) > 0 {
+				out["tagIds"] = ids
+			}
+		}
 	}
 
 	return out, nil
-}
-
-// parentOf reports the id of an entity's parent, or "" when it sits at the
-// root. The path runs root-first and ends with the entity itself, so the
-// parent is the element before last.
-func parentOf(ctx context.Context, c *homebox.Client, id string) (string, error) {
-	out, err := c.Call(ctx, http.MethodGet, "/entities/"+url.PathEscape(id)+"/path", nil, nil)
-	if err != nil {
-		return "", err
-	}
-
-	path, ok := out.([]any)
-	if !ok || len(path) < 2 {
-		return "", nil
-	}
-
-	parent, ok := path[len(path)-2].(map[string]any)
-	if !ok {
-		return "", nil
-	}
-
-	pid, _ := parent["id"].(string)
-
-	return pid, nil
 }
