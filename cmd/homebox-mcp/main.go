@@ -1,5 +1,9 @@
 // Command homebox-mcp serves a HomeBox inventory over the Model Context
-// Protocol, read only.
+// Protocol: entities, tags, entity types, templates, maintenance records and
+// attachments, read and written.
+//
+// The destructive corners of the API are deliberately not exposed -- see
+// "What it will not do" in the README.
 //
 // Two transports:
 //
@@ -38,7 +42,7 @@ func main() {
 
 	cmd := &cli.Command{
 		Name:    "homebox-mcp",
-		Usage:   "read-only MCP server for a HomeBox inventory",
+		Usage:   "MCP server for a HomeBox inventory",
 		Version: version,
 		Flags: []cli.Flag{
 			&cli.StringFlag{

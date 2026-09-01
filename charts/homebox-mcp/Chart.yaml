@@ -1,6 +1,6 @@
 apiVersion: v2
 name: homebox-mcp
-description: Read-only Model Context Protocol server for a HomeBox inventory
+description: Model Context Protocol server for a HomeBox inventory
 type: application
 version: 0.3.0
 appVersion: "0.3.0"

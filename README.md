@@ -1,24 +1,37 @@
 # homebox-mcp
 
-Read-only [Model Context Protocol](https://modelcontextprotocol.io) server for
-a [HomeBox](https://homebox.software) inventory.
+[Model Context Protocol](https://modelcontextprotocol.io) server for a
+[HomeBox](https://homebox.software) inventory, in Go. Ask a model what is in
+the attic, add what you just bought, or record that the boiler was serviced.
 
 ```
-oci://ghcr.io/opwerm/homebox-mcp
+ghcr.io/opwerm/homebox-mcp              image, multi-arch amd64 + arm64
+oci://ghcr.io/opwerm/charts/homebox-mcp chart
 ```
 
-## Why this exists rather than a fork
+## Quick start
 
-The obvious starting point, `jeeves5454/Homebox-mcp`, was rejected twice over.
+Mint a HomeBox API key (Settings → API Keys), then point a client at the
+binary:
 
-Its **licence is asserted but never granted** — the README and `package.json`
-both say MIT, but there is no LICENSE file, GitHub's licence API returns 404,
-and no copyright holder is named. The author's intent is clear; intent is not
-a grant, and redistribution is the part that needs one.
+```
+claude mcp add homebox \
+  -e HOMEBOX_URL=https://homebox.example.com \
+  -e HOMEBOX_TOKEN=hb_... \
+  -- /path/to/homebox-mcp
+```
 
-And it **targets an API that no longer exists**. HomeBox 0.26.2 replaced
-`/v1/items`, `/v1/labels` and `/v1/locations` with `/v1/entities` and
-`/v1/tags`. Every tool it exposes would 404.
+Full instructions, including the Helm chart, are in
+[docs/installation.md](docs/installation.md).
+
+## Documentation
+
+| | |
+|---|---|
+| [Installation](docs/installation.md) | binary, container and Helm chart; every value and env var |
+| [Connecting a client](docs/clients.md) | Claude Code over stdio and HTTP; what to expect from the tools |
+| [Architecture](docs/architecture.md) | the request path, why the server authenticates nothing, what is load-bearing |
+| [Development](docs/development.md) | devbox, `just check`, testing, releasing, adding a tool |
 
 ## What it exposes
 
@@ -65,37 +78,31 @@ damage a model cannot see coming and cannot undo:
 Configuration is two tools rather than a dozen: one read that returns the group
 and user settings together, and one write that takes the same shape back.
 
-## Authentication
+## Two things to know before deploying it
 
-HomeBox accepts exactly one credential: **its own API key**, as
-`Authorization: Bearer`. It does not accept an OIDC token — its OIDC support
-is a browser redirect flow that ends by *issuing* one of these keys.
-
-Mint one under user settings, then:
-
-```
-HOMEBOX_URL=http://homebox HOMEBOX_TOKEN=hb_... homebox-mcp
-```
-
-Data in HomeBox is scoped by **group**, not by user, so the key sees whatever
-its owner's group contains. Everyone in one group sees one inventory, which
-for a household is the point rather than a limitation.
-
-## Transports
-
-```
-TRANSPORT=stdio   default; run it next to a local client
-TRANSPORT=http    streamable HTTP on ADDR (default 0.0.0.0:8080)
-```
-
-`0.0.0.0`, not loopback: in a container, binding to `127.0.0.1` means nothing
-can reach it, including the readiness probe.
+**HomeBox accepts exactly one credential: its own API key.** It does not
+accept an OIDC token — HomeBox's OIDC support is a browser redirect flow that
+ends by *issuing* one of these keys. Data is scoped by **group**, not by
+user, so the key sees whatever its owner's group contains.
 
 **The HTTP transport authenticates nothing.** It is built to sit behind a
 gateway that validates a token. Exposed directly to a network, it is the
-whole inventory, unauthenticated. `/healthz` is liveness only and does not
-call HomeBox — a probe that fails when a dependency blips restarts a process
-that would have recovered.
+whole inventory, unauthenticated and writable. There is no setting that turns
+authentication on, because there is none to turn on — see
+[architecture](docs/architecture.md#the-server-authenticates-nothing).
+
+## Why this exists rather than a fork
+
+The obvious starting point, `jeeves5454/Homebox-mcp`, was rejected twice over.
+
+Its **licence is asserted but never granted** — the README and `package.json`
+both say MIT, but there is no LICENSE file, GitHub's licence API returns 404,
+and no copyright holder is named. The author's intent is clear; intent is not
+a grant, and redistribution is the part that needs one.
+
+And it **targets an API that no longer exists**. HomeBox 0.26.2 replaced
+`/v1/items`, `/v1/labels` and `/v1/locations` with `/v1/entities` and
+`/v1/tags`. Every tool it exposes would 404.
 
 ## Licence
 

@@ -1,4 +1,4 @@
-// Package homebox is a minimal read-only client for the HomeBox API.
+// Package homebox is a minimal client for the HomeBox API.
 //
 // Deliberately not generated from the OpenAPI spec: this server exposes a
 // handful of GETs, and a generated client would be several thousand lines
